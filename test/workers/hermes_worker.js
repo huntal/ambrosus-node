@@ -8,12 +8,16 @@ This Source Code Form is “Incompatible With Secondary Licenses”, as defined 
 */
 
 import chai from 'chai';
+import chaiHttp from 'chai-http';
 import sinon from 'sinon';
 import HermesWorker from '../../src/workers/hermes_worker';
 import HermesUploadStrategy from '../../src/workers/hermes_strategies/regular_interval_upload_strategy';
 import sinonChai from 'sinon-chai';
+import {createWeb3} from '../../src/utils/web3_tools';
+import config from '../../config/config';
 
 chai.use(sinonChai);
+chai.use(chaiHttp);
 const {expect} = chai;
 
 describe('Hermes Worker', () => {
@@ -31,16 +35,22 @@ describe('Hermes Worker', () => {
   let bundlingSucceededStub;
 
   beforeEach(async () => {
+    const web3 = await createWeb3(config);
     mockDataModelEngine = {
+      mongoClient: {
+        isConnected: sinon.stub().returns(true)
+      },
       initialiseBundling: sinon.stub(),
       cancelBundling: sinon.stub(),
       finaliseBundling: sinon.stub()
     };
     mockUploadRepository = {
-      bundleSizeLimit: sinon.stub()
+      bundleSizeLimit: sinon.stub(),
+      uploadsWrapper: {web3}
     };
     mockLogger = {
-      info: sinon.stub()
+      info: sinon.stub(),
+      error: console.error
     };
     mockResult = {
       bundleId: '0xc0ffee'
@@ -55,10 +65,11 @@ describe('Hermes Worker', () => {
     mockDataModelEngine.initialiseBundling.resolves(mockResult);
     mockUploadRepository.bundleSizeLimit.resolves(bundleSizeLimit);
     await hermesWorker.beforeWorkLoop();
+    await hermesWorker.work();
   });
 
   afterEach(async () => {
-    await hermesWorker.afterWorkLoop();
+    await hermesWorker.teardown();
     workerIntervalStub.restore();
     storagePeriodsStub.restore();
     shouldBundleStub.restore();
@@ -79,6 +90,12 @@ describe('Hermes Worker', () => {
   it('asks strategy if the bundle should be uploaded', async () => {
     await hermesWorker.periodicWork();
     expect(shouldBundleStub).to.have.been.calledOnceWith(mockResult);
+  });
+
+  it('responds to health checks', async () => {
+    const {port} = hermesWorker.server.address();
+    const {status} = await chai.request(`http://localhost:${port}`).get('/health');
+    expect(status).to.eql(200);
   });
 
   describe('Bundle aborted', async () => {

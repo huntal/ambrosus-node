@@ -7,19 +7,44 @@ This Source Code Form is subject to the terms of the Mozilla Public License, v. 
 This Source Code Form is “Incompatible With Secondary Licenses”, as defined by the Mozilla Public License, v. 2.0.
 */
 
+import express from 'express';
+
 import PeriodicWorker from './periodic_worker';
 import HermesUploadStrategy from './hermes_strategies/upload_strategy';
+import healthCheckHandler from '../routes/health_check';
+import errorHandling from '../middlewares/error_handling';
+import asyncMiddleware from '../middlewares/async_middleware';
 
 export default class HermesWorker extends PeriodicWorker {
-  constructor(dataModelEngine, uploadRepository, strategy, logger) {
+  constructor(dataModelEngine, uploadRepository, strategy, logger, serverPort) {
     super(strategy.workerInterval, logger);
     this.dataModelEngine = dataModelEngine;
     this.bundleSequenceNumber = 0;
     this.strategy = strategy;
     this.uploadRepository = uploadRepository;
+    this.expressApp = express();
+    this.serverPort = serverPort;
+
+    this.expressApp.get('/health', asyncMiddleware(
+      healthCheckHandler(dataModelEngine.mongoClient, uploadRepository.uploadsWrapper.web3)
+    ));
+    this.expressApp.use(errorHandling(logger));
+
     if (!(this.strategy instanceof HermesUploadStrategy)) {
       throw new Error('A valid strategy must be provided');
     }
+  }
+
+  async work() {
+    // .call() is a workaround for
+    // https://github.com/babel/babel/issues/3930#issuecomment-254827874
+    await super.work.call(this);
+    this.server = this.expressApp.listen(this.serverPort);
+  }
+
+  async teardown() {
+    await super.teardown.call(this);
+    this.server.close();
   }
 
   async periodicWork() {
